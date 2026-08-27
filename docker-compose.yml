@@ -57,18 +57,42 @@ services:
       PROJECTION_INTERVAL_MS: "5000"
       STALE_AFTER_SECONDS: "120"
       AUTH_ENABLED: "${AUTH_ENABLED:-true}"
-      COOKIE_SECURE: "${COOKIE_SECURE:-false}"
-      SESSION_TTL_HOURS: "${SESSION_TTL_HOURS:-24}"
       ADMIN_USERNAME: "${ADMIN_USERNAME:-admin}"
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:-admin}"
+      # Gateway-hosted agent execution. The gateway inherits the API credential
+      # from its own environment; it does not manage or store keys.
+      AGENT_ENABLED: "${AGENT_ENABLED:-true}"
+      AGENT_WORKSPACE: /workspace
+      AGENT_OTEL_ENDPOINT: http://otel-collector:4317
+      AGENT_PERMISSION_MODE: "${AGENT_PERMISSION_MODE:-bypassPermissions}"
+      AGENT_MODEL: "${AGENT_MODEL:-}"
+      # Credentials for hosted runs — read from .env, passed through. The gateway
+      # does not manage keys; it only forwards what the environment provides.
+      # --- Amazon Bedrock via a long-lived IAM user (access key + secret) ---
+      CLAUDE_CODE_USE_BEDROCK: "${CLAUDE_CODE_USE_BEDROCK:-}"
+      AWS_REGION: "${AWS_REGION:-}"
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
+      # Only needed for temporary/STS credentials; leave empty for a long-lived key.
+      AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN:-}"
+      # --- Or: Anthropic API directly (leave the Bedrock block empty) ---
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      ANTHROPIC_AUTH_TOKEN: "${ANTHROPIC_AUTH_TOKEN:-}"
+      ANTHROPIC_BASE_URL: "${ANTHROPIC_BASE_URL:-}"
+      ANTHROPIC_MODEL: "${ANTHROPIC_MODEL:-}"
     ports:
       - "8080:8080"
+    volumes:
+      - agent-workspace:/workspace
     depends_on:
       postgres:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
 
 volumes:
   postgres-data:
   clickhouse-data:
+  agent-workspace:
