@@ -1,12 +1,16 @@
 import cors from "@fastify/cors";
 import Fastify from "fastify";
+import { registerAuth } from "./auth.js";
 import { config } from "./config.js";
 import { closeDatabases, postgres } from "./db.js";
 import { projectOnce } from "./projector.js";
 import { registerRoutes } from "./routes.js";
+import { registerWeb } from "./web.js";
 
 const app = Fastify({ logger: true });
-await app.register(cors, { origin: true });
+await app.register(cors, { origin: true, credentials: true });
+await registerAuth(app);
+await registerWeb(app);
 await registerRoutes(app);
 
 let projecting = false;

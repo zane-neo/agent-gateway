@@ -30,3 +30,23 @@ CREATE TABLE IF NOT EXISTS projection_checkpoints (
 INSERT INTO projection_checkpoints (projector, cursor_timestamp)
 VALUES ('claude-code-logs', '1970-01-01T00:00:00Z')
 ON CONFLICT (projector) DO NOTHING;
+
+-- Authentication: users and server-side sessions. The application also creates
+-- these at startup (CREATE TABLE IF NOT EXISTS) and seeds a bootstrap admin, so
+-- existing databases pick them up without recreating the volume.
+CREATE TABLE IF NOT EXISTS users (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  username text NOT NULL UNIQUE,
+  password_hash text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash text PRIMARY KEY,
+  user_id bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS sessions_expires_idx ON sessions (expires_at);
+CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions (user_id);
