@@ -8,11 +8,11 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "check": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/projector.test.ts"
+    "test": "tsx --test src/projector.test.ts src/auth.test.ts src/clickhouse-time.test.ts"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.247",
     "@clickhouse/client": "^1.12.1",
-    "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.1.0",
     "fastify": "^5.5.0",
     "pg": "^8.16.3",

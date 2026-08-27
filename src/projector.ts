@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { clickhouse, postgres } from "./db.js";
+import { toClickHouseDateTime64 } from "./clickhouse-time.js";
+import { clickhouse, clickhouseTableExists, postgres } from "./db.js";
 import type { ClaudeLogRow, ProjectedEvent, RunStatus } from "./types.js";
 
 const CHECKPOINT = "claude-code-logs";
@@ -129,10 +130,13 @@ async function checkpoint(): Promise<Date> {
 }
 
 async function loadLogs(cursor: Date): Promise<ClaudeLogRow[]> {
+  if (!(await clickhouseTableExists("otel_logs"))) {
+    return [];
+  }
   const result = await clickhouse.query({
     query: `
       SELECT
-        formatDateTime(Timestamp, '%FT%T.%NZ', 'UTC') AS timestamp,
+        formatDateTime(Timestamp, '%FT%T.%fZ', 'UTC') AS timestamp,
         TraceId AS traceId,
         SpanId AS spanId,
         Body AS body,
@@ -148,7 +152,7 @@ async function loadLogs(cursor: Date): Promise<ClaudeLogRow[]> {
       ORDER BY Timestamp ASC
       LIMIT 5000
     `,
-    query_params: { cursor: cursor.toISOString() },
+    query_params: { cursor: toClickHouseDateTime64(cursor) },
     format: "JSONEachRow"
   });
   return result.json<ClaudeLogRow>();

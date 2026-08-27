@@ -53,13 +53,39 @@ docker compose up --build -d
 finch compose up --build -d
 ```
 
-验证：
+## API 鉴权
+
+所有 `/api/*` 接口都要求 Bearer token。启动时会根据
+`ADMIN_USERNAME` 和 `ADMIN_PASSWORD` upsert 初始用户；数据库仅保存密码哈希
+以及 token 的二次哈希，不保存明文密码。
+
+客户端 token 的计算规则：
+
+```text
+SHA-256(username + ":" + password)
+```
+
+Shell 示例：
 
 ```bash
-curl http://localhost:8080/health
-curl http://localhost:8080/api/runs
-curl http://localhost:8080/api/stats
+export AG_USERNAME=admin
+export AG_PASSWORD='change-this-password'
+export AG_TOKEN="$(
+  printf '%s:%s' "$AG_USERNAME" "$AG_PASSWORD" |
+    shasum -a 256 |
+    awk '{print $1}'
+)"
+
+curl -H "Authorization: Bearer $AG_TOKEN" \
+  http://localhost:8080/api/auth/me
+curl -H "Authorization: Bearer $AG_TOKEN" \
+  http://localhost:8080/api/runs
+curl -H "Authorization: Bearer $AG_TOKEN" \
+  http://localhost:8080/api/stats
 ```
+
+浏览器登录页会用 Web Crypto 在客户端计算相同 token；密码不会发送到服务端。
+该 token 是长期密码等价凭证，EC2 部署必须使用 HTTPS，并应立即修改默认密码。
 
 ## 配置 Claude Code
 
@@ -73,6 +99,9 @@ export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 export OTEL_RESOURCE_ATTRIBUTES="service.name=claude-code,deployment.environment=local"
 
+# 可选：记录用户提示词与助手回复的原文（默认 Claude Code 会将其 redact 为 <REDACTED>）
+export OTEL_LOG_USER_PROMPTS=1
+
 # 可选：增强 trace
 export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1
 export OTEL_TRACES_EXPORTER=otlp
@@ -82,14 +111,34 @@ claude
 
 默认不开启 prompt、回复正文或工具详细内容，避免把代码和敏感数据写入遥测库。
 
+## 远程控制 Agent（网关托管执行）
+
+除观测外，网关还能直接托管执行 Claude Code：在仪表盘底部输入 prompt 即可，
+网关用 Claude Agent SDK 在服务端进程内运行 Agent。
+
+- 网关**不管理凭证**：API key / 登录信息由运行环境提供（`ANTHROPIC_API_KEY`
+  等，见 `.env.example`），托管进程直接继承。
+- 托管运行会注入 OTel 环境变量，遥测经同一条管道进入 ClickHouse，因此这些会话
+  会自动出现在左侧 session 列表里，对话详情实时刷新。
+- 提交的 prompt 与最终结果另存于 `agent_prompts` 表，即使没有遥测也可追溯。
+- 选中一个由网关托管创建的会话再发送，会以 `resume` 继续该会话；否则新建会话。
+
+```text
+POST /api/agent/prompts        { "prompt": "...", "resumeSessionId": "<可选>" }
+GET  /api/agent/prompts?limit=50
+GET  /api/agent/prompts/:id
+```
+
 ## API
 
 ```text
-GET /health
 GET /api/stats
 GET /api/runs?status=running&limit=50&cursor=<timestamp>
 GET /api/runs/:runId
-GET /api/runs/:runId/events?limit=200&before=<timestamp>
+GET /api/runs/:runId/events?limit=1000&after=<timestamp>
+POST /api/agent/prompts
+GET /api/agent/prompts
+GET /api/agent/prompts/:id
 ```
 
 ## 数据流

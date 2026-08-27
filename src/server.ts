@@ -1,5 +1,6 @@
 import cors from "@fastify/cors";
 import Fastify from "fastify";
+import { ensureAgentSchema } from "./agent.js";
 import { registerAuth } from "./auth.js";
 import { config } from "./config.js";
 import { closeDatabases, postgres } from "./db.js";
@@ -7,9 +8,14 @@ import { projectOnce } from "./projector.js";
 import { registerRoutes } from "./routes.js";
 import { registerWeb } from "./web.js";
 
-const app = Fastify({ logger: true });
-await app.register(cors, { origin: true, credentials: true });
+// Larger body limit so prompts can carry base64-encoded images.
+const app = Fastify({ logger: true, bodyLimit: 25 * 1024 * 1024 });
+await app.register(cors, {
+  origin: true,
+  allowedHeaders: ["content-type", "authorization"]
+});
 await registerAuth(app);
+await ensureAgentSchema();
 await registerWeb(app);
 await registerRoutes(app);
 
