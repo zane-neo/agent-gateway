@@ -57,6 +57,12 @@ export async function ensureAgentSchema(): Promise<void> {
   await postgres.query(
     "CREATE INDEX IF NOT EXISTS agent_prompts_created_at_idx ON agent_prompts (created_at DESC)"
   );
+  // Human-readable session name (derived from the first user prompt by the
+  // projector). Kept alongside the run so the UI can show it instead of the raw
+  // session UUID. Added here as an idempotent migration for pre-existing DBs.
+  await postgres.query(
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS title text"
+  );
 }
 
 // Build the environment for the hosted run: inherit everything (credentials
@@ -76,6 +82,22 @@ function hostedEnv(): Record<string, string> {
     env.OTEL_RESOURCE_ATTRIBUTES ||
     "service.name=claude-code,deployment.environment=gateway-hosted";
   return env;
+}
+
+// Only `cwd` (AGENT_WORKSPACE) and ~/.claude are backed by persistent volumes;
+// everything else in the container — including the home directory and /tmp — is
+// wiped when the container is recreated. Steer the model into keeping all of its
+// work under the workspace so hosted output isn't silently lost on the next
+// rebuild (this is exactly how an earlier project written to ~/Documents was lost).
+function workspaceDirective(): string {
+  const ws = config.AGENT_WORKSPACE;
+  return (
+    `PERSISTENCE: \`${ws}\` (your working directory) is the ONLY persistent storage ` +
+    `on this machine. Always create, edit, and save files under \`${ws}\`. ` +
+    `Anything written elsewhere (your home directory, /tmp, etc.) is DESTROYED when ` +
+    `the container restarts, so never place project files or deliverables outside ` +
+    `\`${ws}\`. When asked to start a new project, create it inside \`${ws}\`.`
+  );
 }
 
 async function markSession(id: string, sessionId: string): Promise<void> {
@@ -166,6 +188,13 @@ async function runAgent(
       prompt: buildPrompt(promptText, images),
       options: {
         cwd: config.AGENT_WORKSPACE,
+        // Keep Claude Code's default system prompt but append a hard rule that
+        // all files must live under the (persistent) workspace.
+        systemPrompt: {
+          type: "preset",
+          preset: "claude_code",
+          append: workspaceDirective()
+        },
         permissionMode: config.AGENT_PERMISSION_MODE,
         ...(config.AGENT_PERMISSION_MODE === "bypassPermissions"
           ? { allowDangerouslySkipPermissions: true }

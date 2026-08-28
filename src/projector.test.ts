@@ -21,6 +21,63 @@ test("projects a Claude Code user prompt", () => {
   assert.equal(event.promptIncrement, 1);
 });
 
+test("derives a session title from the prompt, truncating long ones", () => {
+  const short = projectClaudeEvent({
+    timestamp: "2026-08-27T01:02:03.000Z",
+    traceId: "t",
+    spanId: "s",
+    body: "{}",
+    resources: {},
+    attributes: {
+      "session.id": "s1",
+      "event.name": "claude_code.user_prompt",
+      prompt: "  build\n  a  todo app  "
+    }
+  });
+  assert.equal(short?.title, "build a todo app");
+
+  const long = projectClaudeEvent({
+    timestamp: "2026-08-27T01:02:03.000Z",
+    traceId: "t",
+    spanId: "s",
+    body: "{}",
+    resources: {},
+    attributes: {
+      "session.id": "s2",
+      "event.name": "claude_code.user_prompt",
+      prompt: "x".repeat(200)
+    }
+  });
+  assert.equal(long?.title?.length, 80);
+  assert.ok(long?.title?.endsWith("…"));
+
+  // Redacted or absent prompts must not produce a placeholder title.
+  const redacted = projectClaudeEvent({
+    timestamp: "2026-08-27T01:02:03.000Z",
+    traceId: "t",
+    spanId: "s",
+    body: "{}",
+    resources: {},
+    attributes: {
+      "session.id": "s3",
+      "event.name": "claude_code.user_prompt",
+      prompt: "<REDACTED>"
+    }
+  });
+  assert.equal(redacted?.title, undefined);
+
+  // Non-prompt events never carry a title.
+  const nonPrompt = projectClaudeEvent({
+    timestamp: "2026-08-27T01:02:03.000Z",
+    traceId: "t",
+    spanId: "s",
+    body: "{}",
+    resources: {},
+    attributes: { "session.id": "s4", "event.name": "claude_code.tool_result" }
+  });
+  assert.equal(nonPrompt?.title, undefined);
+});
+
 test("projects a permission wait", () => {
   const event = projectClaudeEvent({
     timestamp: "2026-08-27T01:02:03.000Z",

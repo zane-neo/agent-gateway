@@ -14,6 +14,9 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   output_tokens bigint NOT NULL DEFAULT 0,
   estimated_cost_usd numeric(18, 8) NOT NULL DEFAULT 0,
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  -- Human-readable session name derived from the first user prompt; falls back
+  -- to the session UUID in the UI when absent (e.g. prompts were redacted).
+  title text,
   updated_at timestamptz NOT NULL DEFAULT now(),
   CHECK (status IN ('running', 'waiting_for_user', 'waiting_for_permission', 'completed', 'failed', 'stale'))
 );

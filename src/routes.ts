@@ -87,6 +87,28 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     return run;
   });
 
+  app.delete<{ Params: RunParams }>(
+    "/api/runs/:runId",
+    async (request, reply) => {
+      const { rows } = await postgres.query<{ session_id: string }>(
+        "DELETE FROM agent_runs WHERE run_id = $1 RETURNING session_id",
+        [request.params.runId]
+      );
+      const deleted = rows[0];
+      if (!deleted) return reply.code(404).send({ error: "run_not_found" });
+      // Also drop any gateway-hosted prompt rows tied to this session so a
+      // deleted hosted conversation doesn't linger in the agent-prompt history.
+      // Telemetry in ClickHouse is left untouched; since the projector only
+      // reads logs newer than its checkpoint, a settled session stays deleted
+      // (a still-active one may reappear on its next event, which is expected).
+      await postgres.query(
+        "DELETE FROM agent_prompts WHERE claude_session_id = $1",
+        [deleted.session_id]
+      );
+      return { deleted: true };
+    }
+  );
+
   app.get<{ Params: RunParams; Querystring: EventsQuery }>(
     "/api/runs/:runId/events",
     async (request, reply) => {
