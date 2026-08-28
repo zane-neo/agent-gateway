@@ -23,6 +23,15 @@ function numeric(value: string | undefined): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+// Collapse a prompt into a short single-line session name. Returns undefined for
+// empty/redacted prompts so a real title isn't overwritten by a placeholder.
+function summarizeTitle(prompt: string | undefined): string | undefined {
+  if (!prompt) return undefined;
+  const flat = prompt.replace(/\s+/g, " ").trim();
+  if (!flat || flat === "<REDACTED>") return undefined;
+  return flat.length > 80 ? `${flat.slice(0, 79)}…` : flat;
+}
+
 function parseBody(body: string): Record<string, unknown> {
   try {
     const parsed: unknown = JSON.parse(body);
@@ -102,6 +111,18 @@ export function projectClaudeEvent(row: ClaudeLogRow): ProjectedEvent | null {
     ])
   );
 
+  // Derive a human-readable session name from the first user prompt. Telemetry
+  // only carries the prompt text when OTEL_LOG_USER_PROMPTS=1 and it isn't
+  // redacted; otherwise title stays undefined and the UI falls back to the UUID.
+  let title: string | undefined;
+  if (/user_prompt/i.test(eventName)) {
+    const promptText =
+      first(row.attributes, row.resources, ["prompt"]) ??
+      (typeof body.prompt === "string" ? body.prompt : undefined) ??
+      (typeof body.message === "string" ? body.message : undefined);
+    title = summarizeTitle(promptText);
+  }
+
   return {
     sessionId,
     runId: `run_${createHash("sha256").update(sessionId).digest("hex").slice(0, 20)}`,
@@ -114,6 +135,7 @@ export function projectClaudeEvent(row: ClaudeLogRow): ProjectedEvent | null {
     outputTokens,
     estimatedCostUsd,
     promptIncrement: /user_prompt/i.test(eventName) ? 1 : 0,
+    title,
     metadata: {
       traceId: row.traceId,
       spanId: row.spanId
@@ -165,9 +187,9 @@ async function saveEvent(event: ProjectedEvent): Promise<void> {
       INSERT INTO agent_runs (
         run_id, session_id, status, started_at, last_event_at, ended_at,
         current_event, current_tool, waiting_reason, prompt_count,
-        input_tokens, output_tokens, estimated_cost_usd, metadata
+        input_tokens, output_tokens, estimated_cost_usd, title, metadata
       )
-      VALUES ($1, $2, $3, $4, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      VALUES ($1, $2, $3, $4, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       ON CONFLICT (session_id) DO UPDATE SET
         status = EXCLUDED.status,
         last_event_at = GREATEST(agent_runs.last_event_at, EXCLUDED.last_event_at),
@@ -179,6 +201,8 @@ async function saveEvent(event: ProjectedEvent): Promise<void> {
         input_tokens = agent_runs.input_tokens + EXCLUDED.input_tokens,
         output_tokens = agent_runs.output_tokens + EXCLUDED.output_tokens,
         estimated_cost_usd = agent_runs.estimated_cost_usd + EXCLUDED.estimated_cost_usd,
+        -- First prompt to arrive names the session; later events keep it.
+        title = COALESCE(agent_runs.title, EXCLUDED.title),
         metadata = agent_runs.metadata || EXCLUDED.metadata,
         updated_at = now()
     `,
@@ -195,6 +219,7 @@ async function saveEvent(event: ProjectedEvent): Promise<void> {
       event.inputTokens,
       event.outputTokens,
       event.estimatedCostUsd,
+      event.title ?? null,
       JSON.stringify(event.metadata)
     ]
   );

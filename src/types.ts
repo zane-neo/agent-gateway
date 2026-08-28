@@ -27,5 +27,7 @@ export interface ProjectedEvent {
   outputTokens: number;
   estimatedCostUsd: number;
   promptIncrement: number;
+  // Session name derived from a user prompt; only the first one to arrive is kept.
+  title?: string;
   metadata: Record<string, unknown>;
 }

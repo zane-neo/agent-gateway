@@ -54,12 +54,22 @@ const PAGE_STYLE = `
   .session-list { overflow-y: auto; flex: 1; -webkit-overflow-scrolling: touch; }
   .session-item {
     padding: 12px 16px; border-bottom: 1px solid #1c2029; cursor: pointer;
+    display: flex; align-items: flex-start; gap: 8px;
   }
   .session-item:hover { background: #1c2029; }
   .session-item.active { background: #1a2130; border-left: 3px solid #3b82f6; padding-left: 13px; }
-  .session-item .sid { font-size: 13px; font-weight: 600; word-break: break-all; }
+  .session-item .session-main { flex: 1; min-width: 0; }
+  .session-item .sid { font-size: 13px; font-weight: 600; word-break: break-word; }
   .session-item .sub { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
   .session-item .time { font-size: 11px; color: #9aa4b2; }
+  .session-item .short {
+    font-size: 11px; color: #6b7280; font-family: ui-monospace, Menlo, monospace;
+  }
+  .session-del {
+    flex: 0 0 auto; background: transparent; border: 0; color: #6b7280; cursor: pointer;
+    padding: 2px 6px; font-size: 15px; line-height: 1; border-radius: 6px;
+  }
+  .session-del:hover { background: #3a1d1d; color: #f87171; }
 
   /* Main: conversation */
   .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
@@ -347,6 +357,11 @@ const renderHome = (authEnabled: boolean): string => `<!doctype html>
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
+  // Short form of a session UUID for compact display, e.g. "a1b2c3d4…".
+  function shortId(v) {
+    var s = String(v == null ? '' : v);
+    return s.length > 8 ? s.slice(0, 8) + '…' : s;
+  }
 
   // Minimal, XSS-safe Markdown → HTML. The input is untrusted (assistant
   // output, tool results, user prompts), so EVERYTHING is HTML-escaped before
@@ -462,15 +477,35 @@ const renderHome = (authEnabled: boolean): string => `<!doctype html>
       var kind = hosted
         ? '<span class="badge hosted" title="网关托管，可继续对话">托管</span>'
         : '<span class="badge observed" title="观测会话，无法继续">观测</span>';
+      // Show the human-readable session name; fall back to the UUID when the
+      // first prompt wasn't captured. The short id keeps the raw id discoverable.
+      var name = r.title || r.session_id;
+      var showShort = r.title && r.session_id;
       return '<div class="session-item' + active + '" data-run="' + esc(r.run_id) + '">' +
-        '<div class="sid">' + esc(r.session_id) + '</div>' +
-        '<div class="sub">' +
-          '<span class="badge ' + esc(r.status) + '">' + esc(r.status) + '</span>' +
-          kind +
-          '<span class="time">' + fmtTime(r.last_event_at) + '</span>' +
+        '<div class="session-main">' +
+          '<div class="sid" title="' + esc(r.session_id) + '">' + esc(name) + '</div>' +
+          '<div class="sub">' +
+            '<span class="badge ' + esc(r.status) + '">' + esc(r.status) + '</span>' +
+            kind +
+            (showShort ? '<span class="short">' + esc(shortId(r.session_id)) + '</span>' : '') +
+            '<span class="time">' + fmtTime(r.last_event_at) + '</span>' +
+          '</div>' +
         '</div>' +
+        '<button class="session-del" type="button" data-run="' + esc(r.run_id) + '" ' +
+          'title="删除 session" aria-label="删除">🗑</button>' +
       '</div>';
     }).join('');
+  }
+
+  async function deleteSession(runId) {
+    if (!runId) return;
+    if (!confirm('确定删除这个 session？该会话将从列表中移除，此操作不可撤销。')) return;
+    var res = await api('/api/runs/' + encodeURIComponent(runId), { method: 'DELETE' });
+    if (res.status === 401) { onUnauthorized(); return; }
+    if (!res.ok) { setStatus('删除失败，请重试', 'err'); return; }
+    // If the deleted session was open, reset the conversation pane.
+    if (runId === activeRunId) startNewChat();
+    await loadSessions();
   }
 
   // ---- Map a raw log event to a conversation message ----
@@ -653,9 +688,11 @@ const renderHome = (authEnabled: boolean): string => `<!doctype html>
     if (runId !== activeRunId || run.error) return;
     activeSessionId = run.session_id || null;
     updateResumeHint();
-    document.getElementById('convTitle').textContent = run.session_id || runId;
+    document.getElementById('convTitle').textContent = run.title || run.session_id || runId;
     document.getElementById('convSub').innerHTML =
-      '<span class="badge ' + esc(run.status) + '">' + esc(run.status) + '</span> · 开始于 ' + fmtTime(run.started_at);
+      '<span class="badge ' + esc(run.status) + '">' + esc(run.status) + '</span> · ' +
+      (run.title ? '<span class="short">' + esc(run.session_id) + '</span> · ' : '') +
+      '开始于 ' + fmtTime(run.started_at);
     var m = [
       ['Prompts', fmtNum(run.prompt_count)],
       ['输入 tok', fmtNum(run.input_tokens)],
@@ -939,6 +976,8 @@ const renderHome = (authEnabled: boolean): string => `<!doctype html>
   document.getElementById('refresh').addEventListener('click', loadSessions);
   document.getElementById('newChat').addEventListener('click', startNewChat);
   document.getElementById('sessionList').addEventListener('click', function (e) {
+    var del = e.target.closest('.session-del');
+    if (del && del.dataset.run) { e.stopPropagation(); deleteSession(del.dataset.run); return; }
     var item = e.target.closest('.session-item');
     if (item && item.dataset.run) selectSession(item.dataset.run);
   });
