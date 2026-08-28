@@ -84,6 +84,10 @@ services:
       - "8080:8080"
     volumes:
       - agent-workspace:/workspace
+      # Persist ~/.claude so hosted-session transcripts survive container
+      # recreation; without this, `resume` breaks after every rebuild because
+      # the resume state lives in the ephemeral writable layer. HOME=/home/node.
+      - agent-home:/home/node/.claude
     depends_on:
       postgres:
         condition: service_healthy
@@ -96,3 +100,4 @@ volumes:
   postgres-data:
   clickhouse-data:
   agent-workspace:
+  agent-home:

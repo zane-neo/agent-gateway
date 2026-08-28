@@ -188,13 +188,24 @@ async function runAgent(
         // detail lives in `result`; otherwise the subtype names the failure.
         const resultText =
           message.subtype === "success" ? message.result : null;
-        await finish(id, ok ? "completed" : "failed", {
-          result: resultText,
-          error: ok
-            ? null
+        // A resume that dies before any turn almost always means the session's
+        // transcript is gone (e.g. ~/.claude was wiped on container recreate).
+        // Turn the opaque `error_during_execution` into something actionable.
+        const failedResumeAtStartup =
+          !ok &&
+          resumeSessionId !== null &&
+          message.subtype !== "success" &&
+          (message.num_turns ?? 0) === 0;
+        const errorText = ok
+          ? null
+          : failedResumeAtStartup
+            ? `无法继续会话 ${resumeSessionId}：找不到该会话的历史记录（可能因容器重建被清除）。请发送新会话，或确认 ~/.claude 已持久化。(${message.subtype})`
             : message.subtype === "success"
               ? resultText || "run_error"
-              : message.subtype,
+              : message.subtype;
+        await finish(id, ok ? "completed" : "failed", {
+          result: resultText,
+          error: errorText,
           claudeSessionId,
           numTurns: message.num_turns,
           costUsd: message.total_cost_usd

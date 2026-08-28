@@ -55,9 +55,26 @@ finch compose up --build -d
 
 ## API 鉴权
 
-所有 `/api/*` 接口都要求 Bearer token。启动时会根据
-`ADMIN_USERNAME` 和 `ADMIN_PASSWORD` upsert 初始用户；数据库仅保存密码哈希
-以及 token 的二次哈希，不保存明文密码。
+**所有 `/api/*` 接口一律强制鉴权，没有例外。** 鉴权由一个全局 `onRequest`
+钩子实现：任何 path 以 `/api/` 开头的请求都必须携带有效 token，否则返回
+`401`。启动时会根据 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD` upsert 初始用户；
+数据库仅保存密码哈希以及 token 的二次哈希，不保存明文密码。
+
+> **约定：后续新增的任何 API 都必须注册在 `/api/` 前缀下**，这样才会被全局鉴权
+> 钩子自动覆盖；同时所有 API 都统一支持 `?token=xxx` 访问（见下）。不要在
+> `/api/` 之外新增会返回数据的接口。
+
+唯一**不鉴权**的路由是 PWA 外壳与静态资源（它们不含任何数据）：
+`/`、`/manifest.webmanifest`、`/sw.js`、`/icon-180.png`、`/icon-512.png`。
+其中 `/` 只返回前端外壳，真正的数据仍需前端带 token 调用 `/api/*` 才能拿到。
+
+### 两种携带 token 的方式
+
+1. **`Authorization: Bearer <token>` 请求头**（推荐——不会被日志或缓存记录）
+2. **`?token=<token>` 查询参数**（方便直接用 URL 打开任意 API）
+
+服务端会先看请求头，再看查询参数。为避免泄漏，日志里的 `?token=` 一律被脱敏为
+`token=REDACTED`。
 
 客户端 token 的计算规则：
 
@@ -76,16 +93,18 @@ export AG_TOKEN="$(
     awk '{print $1}'
 )"
 
-curl -H "Authorization: Bearer $AG_TOKEN" \
-  http://localhost:8080/api/auth/me
+# 方式一：Bearer 请求头（推荐）
 curl -H "Authorization: Bearer $AG_TOKEN" \
   http://localhost:8080/api/runs
-curl -H "Authorization: Bearer $AG_TOKEN" \
-  http://localhost:8080/api/stats
+
+# 方式二：?token= 查询参数（等价）
+curl "http://localhost:8080/api/runs?token=$AG_TOKEN"
+curl "http://localhost:8080/api/stats?token=$AG_TOKEN"
 ```
 
 浏览器登录页会用 Web Crypto 在客户端计算相同 token；密码不会发送到服务端。
 该 token 是长期密码等价凭证，EC2 部署必须使用 HTTPS，并应立即修改默认密码。
+由于查询参数可能出现在浏览器历史、代理或访问日志中，能用请求头就优先用请求头。
 
 ## 配置 Claude Code
 
