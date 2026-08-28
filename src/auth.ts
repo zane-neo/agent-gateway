@@ -4,7 +4,7 @@ import {
   scrypt as scryptCallback
 } from "node:crypto";
 import { promisify } from "node:util";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { config } from "./config.js";
 import { postgres } from "./db.js";
 
@@ -38,10 +38,32 @@ async function hashPassword(password: string): Promise<string> {
   return `scrypt$${salt.toString("hex")}$${derived.toString("hex")}`;
 }
 
-function bearerToken(header: string | undefined): string | null {
-  if (!header) return null;
-  const match = /^Bearer\s+([a-f0-9]{64})$/i.exec(header.trim());
-  return match?.[1]?.toLowerCase() ?? null;
+const TOKEN_RE = /^[a-f0-9]{64}$/i;
+
+// Extract the API token from a request. Two forms are accepted, in order of
+// preference:
+//   1. `Authorization: Bearer <token>` header (preferred — not logged/cached)
+//   2. `?token=<token>` query parameter (so any API can be opened via URL)
+// The query string is parsed off the raw URL so this works in the onRequest
+// hook regardless of Fastify's query-parsing timing.
+function extractToken(request: FastifyRequest): string | null {
+  const header = request.headers.authorization;
+  if (header) {
+    const match = /^Bearer\s+([a-f0-9]{64})$/i.exec(header.trim());
+    if (match) return match[1]!.toLowerCase();
+  }
+
+  const qIndex = request.url.indexOf("?");
+  if (qIndex !== -1) {
+    const queryToken = new URLSearchParams(request.url.slice(qIndex + 1)).get(
+      "token"
+    );
+    if (queryToken && TOKEN_RE.test(queryToken.trim())) {
+      return queryToken.trim().toLowerCase();
+    }
+  }
+
+  return null;
 }
 
 async function ensureAuthSchema(app: FastifyInstance): Promise<void> {
@@ -121,7 +143,7 @@ export async function registerAuth(app: FastifyInstance): Promise<void> {
     if (!path.startsWith("/api/")) return;
     if (!config.AUTH_ENABLED) return;
 
-    const token = bearerToken(request.headers.authorization);
+    const token = extractToken(request);
     request.user = token ? await lookupToken(token) : null;
     if (!request.user) {
       reply.header("WWW-Authenticate", "Bearer");

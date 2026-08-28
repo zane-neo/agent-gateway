@@ -47,7 +47,10 @@ const PAGE_STYLE = `
     border-bottom: 1px solid #262b34;
   }
   .sidebar-head .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .new-chat { width: 100%; margin-top: 12px; padding: 10px; font-size: 14px; }
   .sidebar-filter { margin-top: 12px; }
+  .badge.hosted { background: #10243b; color: #93c5fd; }
+  .badge.observed { background: #2a2c33; color: #9aa4b2; }
   .session-list { overflow-y: auto; flex: 1; -webkit-overflow-scrolling: touch; }
   .session-item {
     padding: 12px 16px; border-bottom: 1px solid #1c2029; cursor: pointer;
@@ -96,10 +99,48 @@ const PAGE_STYLE = `
   .msg.assistant .msg-role { color: #86efac; }
   .msg.tool .msg-role { color: #c8cdd6; }
   .msg.system .msg-role { color: #fbbf24; }
-  .msg-text { white-space: pre-wrap; word-break: break-word; font-size: 14px; }
+  .msg-md { font-size: 14px; word-break: break-word; }
+  .msg-md > :first-child { margin-top: 0; }
+  .msg-md > :last-child { margin-bottom: 0; }
+  .msg-md p { margin: 0 0 8px; }
+  .msg-md h1, .msg-md h2, .msg-md h3, .msg-md h4, .msg-md h5, .msg-md h6 {
+    margin: 12px 0 6px; line-height: 1.3;
+  }
+  .msg-md h1 { font-size: 18px; } .msg-md h2 { font-size: 16px; }
+  .msg-md h3 { font-size: 15px; } .msg-md h4, .msg-md h5, .msg-md h6 { font-size: 14px; }
+  .msg-md ul, .msg-md ol { margin: 6px 0; padding-left: 22px; }
+  .msg-md li { margin: 2px 0; }
+  .msg-md blockquote {
+    margin: 6px 0; padding: 2px 12px; border-left: 3px solid #2c323d; color: #9aa4b2;
+  }
+  .msg-md a { color: #6ea8fe; word-break: break-all; }
+  .msg-md del { color: #9aa4b2; }
+  .msg-md code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
+    background: #0b0d11; border: 1px solid #262b34; border-radius: 5px; padding: 1px 5px;
+  }
+  .msg-md pre {
+    margin: 8px 0; background: #0b0d11; border: 1px solid #262b34; border-radius: 8px;
+    padding: 10px 12px; overflow-x: auto; -webkit-overflow-scrolling: touch;
+  }
+  .msg-md pre code {
+    background: none; border: 0; padding: 0; font-size: 12.5px; line-height: 1.5;
+    white-space: pre; display: block;
+  }
   .msg-meta { font-size: 12px; color: #9aa4b2; margin-top: 6px; display: flex; gap: 12px; flex-wrap: wrap; }
   .msg-time { font-size: 11px; color: #6b7280; margin-top: 6px; font-family: ui-monospace, Menlo, monospace; }
   .day-sep { text-align: center; color: #6b7280; font-size: 12px; margin: 18px 0; }
+  .msg-imgs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .msg-imgs img { max-width: 160px; max-height: 160px; border-radius: 8px; border: 1px solid #262b34; }
+  /* Typing/loading indicator shown under a just-sent prompt */
+  .typing { display: inline-flex; gap: 5px; align-items: center; padding: 4px 2px; }
+  .typing span {
+    width: 7px; height: 7px; border-radius: 50%; background: #86efac; opacity: .35;
+    animation: typing-blink 1.2s infinite ease-in-out;
+  }
+  .typing span:nth-child(2) { animation-delay: .2s; }
+  .typing span:nth-child(3) { animation-delay: .4s; }
+  @keyframes typing-blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
 
   /* Composer: remote prompt control */
   .composer {
@@ -200,6 +241,7 @@ const renderHome = (authEnabled: boolean): string => `<!doctype html>
         <h1>Agent Gateway</h1>
         <button class="secondary" id="refresh" type="button">刷新</button>
       </div>
+      <button class="new-chat" id="newChat" type="button">＋ 新建对话</button>
       <div class="sidebar-filter">
         <select id="statusFilter">
           <option value="">全部状态</option>
@@ -240,7 +282,7 @@ const renderHome = (authEnabled: boolean): string => `<!doctype html>
           <button id="sendPrompt" type="button">发送</button>
         </div>
         <div class="hint">
-          <span id="resumeHint">将新建一个托管会话执行</span>
+          <span id="resumeHint">新对话 · 发送后自动创建会话</span>
         </div>
         <div class="composer-status" id="composerStatus"></div>
       </div>
@@ -305,6 +347,79 @@ const renderHome = (authEnabled: boolean): string => `<!doctype html>
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
+
+  // Minimal, XSS-safe Markdown → HTML. The input is untrusted (assistant
+  // output, tool results, user prompts), so EVERYTHING is HTML-escaped before
+  // any tag is introduced, links are limited to http(s)/mailto, and only a
+  // fixed set of safe tags is emitted.
+  function renderMarkdown(src) {
+    src = String(src == null ? '' : src).replace(/\\r\\n?/g, '\\n');
+
+    // 1) Lift out fenced code blocks so their contents are never parsed as md.
+    var blocks = [];
+    src = src.replace(/\`\`\`([^\\n\`]*)\\n?([\\s\\S]*?)\`\`\`/g, function (_, lang, code) {
+      blocks.push(code.replace(/\\n$/, ''));
+      return '\\u0000CB' + (blocks.length - 1) + '\\u0000';
+    });
+
+    // 2) Escape everything that remains.
+    src = esc(src);
+
+    function inline(s) {
+      var codes = [];
+      s = s.replace(/\`([^\`]+)\`/g, function (_, c) {
+        codes.push(c); return '\\u0000IC' + (codes.length - 1) + '\\u0000';
+      });
+      // links [text](url) — only safe schemes; url was escaped so quotes are safe
+      s = s.replace(/\\[([^\\]]+)\\]\\((https?:\\/\\/[^\\s)]+|mailto:[^\\s)]+)\\)/g,
+        function (_, t, u) {
+          return '<a href="' + u + '" target="_blank" rel="noopener noreferrer">' + t + '</a>';
+        });
+      s = s.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
+      s = s.replace(/(^|[^*])\\*([^*]+)\\*/g, '$1<em>$2</em>');
+      s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+      s = s.replace(/\\u0000IC(\\d+)\\u0000/g, function (_, n) {
+        return '<code>' + codes[Number(n)] + '</code>';
+      });
+      return s;
+    }
+
+    var lines = src.split('\\n');
+    var out = [];
+    var i = 0;
+    var isBlockStart = function (l) {
+      return /^\\u0000CB\\d+\\u0000$/.test(l) || /^(#{1,6})\\s+/.test(l) ||
+        /^&gt;\\s?/.test(l) || /^\\s*[-*+]\\s+/.test(l) || /^\\s*\\d+\\.\\s+/.test(l);
+    };
+    while (i < lines.length) {
+      var line = lines[i];
+      var cb = line.match(/^\\u0000CB(\\d+)\\u0000$/);
+      if (cb) { out.push('<pre><code>' + esc(blocks[Number(cb[1])]) + '</code></pre>'); i++; continue; }
+      if (/^\\s*$/.test(line)) { i++; continue; }
+      var h = line.match(/^(#{1,6})\\s+(.*)$/);
+      if (h) { var lvl = h[1].length; out.push('<h' + lvl + '>' + inline(h[2]) + '</h' + lvl + '>'); i++; continue; }
+      if (/^&gt;\\s?/.test(line)) {
+        var quote = [];
+        while (i < lines.length && /^&gt;\\s?/.test(lines[i])) { quote.push(inline(lines[i].replace(/^&gt;\\s?/, ''))); i++; }
+        out.push('<blockquote>' + quote.join('<br>') + '</blockquote>'); continue;
+      }
+      if (/^\\s*[-*+]\\s+/.test(line)) {
+        var ul = [];
+        while (i < lines.length && /^\\s*[-*+]\\s+/.test(lines[i])) { ul.push('<li>' + inline(lines[i].replace(/^\\s*[-*+]\\s+/, '')) + '</li>'); i++; }
+        out.push('<ul>' + ul.join('') + '</ul>'); continue;
+      }
+      if (/^\\s*\\d+\\.\\s+/.test(line)) {
+        var ol = [];
+        while (i < lines.length && /^\\s*\\d+\\.\\s+/.test(lines[i])) { ol.push('<li>' + inline(lines[i].replace(/^\\s*\\d+\\.\\s+/, '')) + '</li>'); i++; }
+        out.push('<ol>' + ol.join('') + '</ol>'); continue;
+      }
+      var para = [];
+      while (i < lines.length && !/^\\s*$/.test(lines[i]) && !isBlockStart(lines[i])) { para.push(inline(lines[i])); i++; }
+      out.push('<p>' + para.join('<br>') + '</p>');
+    }
+    return out.join('');
+  }
+
   function fmtTime(v) {
     if (!v) return '—';
     var d = new Date(v);
@@ -343,10 +458,15 @@ const renderHome = (authEnabled: boolean): string => `<!doctype html>
     }
     el.innerHTML = items.map(function (r) {
       var active = r.run_id === activeRunId ? ' active' : '';
+      var hosted = hostedSessions[r.session_id];
+      var kind = hosted
+        ? '<span class="badge hosted" title="网关托管，可继续对话">托管</span>'
+        : '<span class="badge observed" title="观测会话，无法继续">观测</span>';
       return '<div class="session-item' + active + '" data-run="' + esc(r.run_id) + '">' +
         '<div class="sid">' + esc(r.session_id) + '</div>' +
         '<div class="sub">' +
           '<span class="badge ' + esc(r.status) + '">' + esc(r.status) + '</span>' +
+          kind +
           '<span class="time">' + fmtTime(r.last_event_at) + '</span>' +
         '</div>' +
       '</div>';
@@ -415,7 +535,7 @@ const renderHome = (authEnabled: boolean): string => `<!doctype html>
     return '<div class="msg ' + m.role + '">' +
       '<div class="bubble">' +
         '<div class="msg-role">' + esc(m.title) + '</div>' +
-        (m.text ? '<div class="msg-text">' + esc(m.text) + '</div>' : '') +
+        (m.text ? '<div class="msg-md">' + renderMarkdown(m.text) + '</div>' : '') +
         metaHtml +
         '<div class="msg-time">' + fmtClock(m.time) + '</div>' +
       '</div>' +
@@ -426,6 +546,62 @@ const renderHome = (authEnabled: boolean): string => `<!doctype html>
 
   function nearBottom(el) {
     return el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  }
+
+  // Optimistic send: show the user's message and a loading indicator the instant
+  // they hit send, before any telemetry arrives. pendingSend holds the in-flight
+  // prompt until its reply lands (or the run settles).
+  var pendingSend = null;   // { text, images: [{url}] } while awaiting a reply
+
+  function ensureConvInner() {
+    var inner = document.getElementById('convInner');
+    if (!inner) {
+      document.getElementById('conversation').innerHTML =
+        '<div class="conv-inner" id="convInner"></div>';
+      inner = document.getElementById('convInner');
+    }
+    return inner;
+  }
+
+  // (Re)render the optimistic user bubble + loader at the bottom of the pane.
+  function showPending() {
+    if (!pendingSend) return;
+    var inner = ensureConvInner();
+    var oldU = document.getElementById('pending-user'); if (oldU) oldU.remove();
+    var oldL = document.getElementById('pending-loader'); if (oldL) oldL.remove();
+    var imgs = pendingSend.images || [];
+    var imgsHtml = imgs.length
+      ? '<div class="msg-imgs">' + imgs.map(function (im) {
+          return '<img src="' + esc(im.url) + '" alt="">';
+        }).join('') + '</div>'
+      : '';
+    if (pendingSend.text || imgs.length) {
+      inner.insertAdjacentHTML('beforeend',
+        '<div class="msg user" id="pending-user"><div class="bubble">' +
+          '<div class="msg-role">用户</div>' +
+          (pendingSend.text ? '<div class="msg-md">' + renderMarkdown(pendingSend.text) + '</div>' : '') +
+          imgsHtml +
+        '</div></div>');
+    }
+    inner.insertAdjacentHTML('beforeend',
+      '<div class="msg assistant" id="pending-loader"><div class="bubble">' +
+        '<div class="msg-role">助手</div>' +
+        '<div class="typing"><span></span><span></span><span></span></div>' +
+      '</div></div>');
+    var conv = document.getElementById('conversation');
+    conv.scrollTop = conv.scrollHeight;
+  }
+
+  function removeLoader() {
+    var l = document.getElementById('pending-loader'); if (l) l.remove();
+  }
+
+  // The reply (or terminal state) arrived: drop the loader and stop tracking.
+  // Any surviving #pending-user placeholder is left in place — it IS the user's
+  // message when telemetry never delivered a user_prompt event.
+  function clearPending() {
+    pendingSend = null;
+    removeLoader();
   }
 
   async function pollConversation() {
@@ -444,13 +620,25 @@ const renderHome = (authEnabled: boolean): string => `<!doctype html>
     if (!inner) return;
     var stick = nearBottom(conv);
     var added = 0;
+    var loader = document.getElementById('pending-loader');
 
     items.forEach(function (e) {
       var key = e.timestamp + '|' + (e.spanId || '') + '|' + ((e.attributes && e.attributes['event.sequence']) || '') + '|' + (e.body || '');
       if (seenKeys[key]) return;
       seenKeys[key] = true;
-      inner.insertAdjacentHTML('beforeend', messageHtml(toMessage(e)));
       lastEventTs = e.timestamp; // items are chronological asc
+      var msg = toMessage(e);
+      // Adopt the optimistic placeholder for the real user_prompt so the just-
+      // sent message isn't rendered twice; strip its id so later prompts render.
+      if (msg.role === 'user') {
+        var ph = document.getElementById('pending-user');
+        if (ph) { ph.removeAttribute('id'); added++; return; }
+      }
+      // First assistant reply → the wait is over, drop the loading indicator.
+      if (msg.role === 'assistant') { removeLoader(); loader = null; }
+      // Keep the loader pinned at the bottom: stream events in above it.
+      if (loader) loader.insertAdjacentHTML('beforebegin', messageHtml(msg));
+      else inner.insertAdjacentHTML('beforeend', messageHtml(msg));
       added++;
     });
 
@@ -508,12 +696,40 @@ const renderHome = (authEnabled: boolean): string => `<!doctype html>
     var hint = document.getElementById('resumeHint');
     if (!hint) return;
     if (canResume()) {
+      // A gateway-hosted conversation is open → keep chatting in it.
       hint.className = 'resume-on';
-      hint.textContent = '将在当前托管会话继续执行 · ' + activeSessionId;
-    } else {
+      hint.textContent = '继续当前会话 · ' + activeSessionId;
+    } else if (activeSessionId) {
+      // An observed (non-gateway) session is open — we can't inject into it.
       hint.className = '';
-      hint.textContent = '将新建一个托管会话执行';
+      hint.textContent = '这是观测会话，无法继续；发送将开启一个新会话';
+    } else {
+      // New chat.
+      hint.className = '';
+      hint.textContent = '新对话 · 发送后自动创建会话';
     }
+  }
+
+  // ChatGPT-style "New chat": detach from any open session so the next send
+  // starts a fresh gateway conversation.
+  function startNewChat() {
+    activeRunId = null;
+    activeSessionId = null;
+    lastEventTs = null;
+    seenKeys = {};
+    pendingSend = null;
+    if (convTimer) clearInterval(convTimer);
+    var nodes = document.querySelectorAll('.session-item');
+    for (var i = 0; i < nodes.length; i++) nodes[i].classList.remove('active');
+    document.getElementById('convTitle').textContent = '新对话';
+    document.getElementById('convSub').textContent = '输入下方消息，开启一个新的托管会话';
+    document.getElementById('convMetrics').innerHTML = '';
+    document.getElementById('conversation').innerHTML =
+      '<div class="empty">输入下方消息，开启一个新的托管会话</div>';
+    setStatus('');
+    updateResumeHint();
+    closeDrawer();
+    document.getElementById('promptInput').focus();
   }
 
   async function loadHosted() {
@@ -533,33 +749,61 @@ const renderHome = (authEnabled: boolean): string => `<!doctype html>
   }
 
   // Poll a submitted prompt until it settles; once its claude session id is
-  // known, register it and jump to that session so telemetry streams in live.
+  // known, jump to that session so telemetry streams in live. A brand-new
+  // hosted session isn't in the projected /api/runs list immediately, so keep
+  // retrying the jump each poll until the session actually appears.
   async function trackPrompt(id) {
     var jumped = false;
+    async function tryJump(sessionId) {
+      if (jumped || !sessionId) return;
+      if (sessionId === activeSessionId && activeRunId) {
+        // Resuming the already-open session: keep the pane (and the optimistic
+        // bubbles) intact and just pull this turn's new events incrementally,
+        // so we don't replay history or misattribute the placeholder.
+        jumped = true;
+        pollConversation();
+        return;
+      }
+      await loadSessions();
+      var match = null;
+      document.querySelectorAll('.session-item').forEach(function (n) {
+        var sid = n.querySelector('.sid');
+        if (sid && sid.textContent === sessionId) match = n;
+      });
+      if (match && match.dataset.run) {
+        jumped = true;
+        selectSession(match.dataset.run);
+        showPending();   // survive the jump to the freshly-created session
+      }
+    }
     for (var i = 0; i < 600; i++) {
       var res = await api('/api/agent/prompts/' + encodeURIComponent(id));
       if (!res.ok) return;
       var p = await res.json();
       if (p.claude_session_id) {
         hostedSessions[p.claude_session_id] = true;
-        if (!jumped) {
-          jumped = true;
-          setStatus('#' + id + ' 运行中 · 会话 ' + p.claude_session_id, 'ok');
-          await loadSessions();
-          var match = null;
-          document.querySelectorAll('.session-item').forEach(function (n) {
-            if (n.querySelector('.sid') &&
-                n.querySelector('.sid').textContent === p.claude_session_id) match = n;
-          });
-          if (match && match.dataset.run) selectSession(match.dataset.run);
-        }
+        setStatus('#' + id + ' 运行中 · 会话 ' + p.claude_session_id, 'ok');
+        await tryJump(p.claude_session_id);
       }
       if (p.status === 'completed') {
+        pendingSend = null;   // settled: no need to re-show on future selects
         setStatus('#' + id + ' 已完成' + (p.num_turns ? ' · ' + p.num_turns + ' 轮' : ''), 'ok');
-        await loadSessions();
+        // Fast runs can finish before the projector lists the session; keep
+        // retrying the jump briefly so the reply still renders on this page.
+        for (var k = 0; k < 8 && !jumped; k++) {
+          await tryJump(p.claude_session_id);
+          if (jumped) break;
+          await new Promise(function (r) { setTimeout(r, 1500); });
+        }
+        // The reply bubble arrives via telemetry (which lags the DB status), so
+        // keep the loader until it lands; poll now, and drop the loader after a
+        // grace period so it can never hang if telemetry never arrives.
+        pollConversation();
+        setTimeout(removeLoader, 45000);
         return;
       }
       if (p.status === 'failed') {
+        clearPending();
         setStatus('#' + id + ' 执行失败：' + (p.result || p.error || '未知错误'), 'err');
         return;
       }
@@ -632,26 +876,36 @@ const renderHome = (authEnabled: boolean): string => `<!doctype html>
       });
     }
     if (canResume()) body.resumeSessionId = activeSessionId;
+
+    // Show the message and a loading indicator right away, then clear the
+    // composer — the user shouldn't wait for the agent to see what they sent.
+    pendingSend = { text: prompt, images: pendingImages.map(function (img) {
+      return { url: img.url };
+    }) };
+    input.value = '';
+    pendingImages = [];
+    renderThumbs();
+    autosize(input);
+    showPending();
+
     try {
       var res = await api('/api/agent/prompts', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body)
       });
-      if (res.status === 401) { onUnauthorized(); return; }
+      if (res.status === 401) { clearPending(); onUnauthorized(); return; }
       if (!res.ok) {
         var err = await res.json().catch(function () { return {}; });
+        clearPending();
         setStatus('提交失败：' + (err.error || res.status), 'err');
         return;
       }
       var row = await res.json();
-      input.value = '';
-      pendingImages = [];
-      renderThumbs();
-      autosize(input);
       setStatus('#' + row.id + ' 已提交，等待会话建立…', 'ok');
       trackPrompt(row.id);
     } catch (e) {
+      clearPending();
       setStatus('提交失败：' + e, 'err');
     } finally {
       btn.disabled = false;
@@ -683,6 +937,7 @@ const renderHome = (authEnabled: boolean): string => `<!doctype html>
 
   document.getElementById('statusFilter').addEventListener('change', loadSessions);
   document.getElementById('refresh').addEventListener('click', loadSessions);
+  document.getElementById('newChat').addEventListener('click', startNewChat);
   document.getElementById('sessionList').addEventListener('click', function (e) {
     var item = e.target.closest('.session-item');
     if (item && item.dataset.run) selectSession(item.dataset.run);

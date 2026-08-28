@@ -13,8 +13,10 @@ ENV HOME=/home/node
 # Runtime tools for gateway-hosted agent runs (shell/file/search tools).
 # Claude Code refuses bypassPermissions as root, so run as the non-root `node`
 # user and give it an owned workspace + HOME for ~/.claude session storage.
+# Pre-create ~/.claude so a named volume mounted there inherits node ownership
+# on first mount (an empty volume adopts the mountpoint's existing perms).
 RUN apk add --no-cache git ripgrep bash coreutils \
-  && mkdir -p /workspace \
+  && mkdir -p /workspace /home/node/.claude \
   && chown -R node:node /workspace /home/node
 COPY package*.json ./
 RUN npm ci --omit=dev

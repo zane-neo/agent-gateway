@@ -8,8 +8,28 @@ import { projectOnce } from "./projector.js";
 import { registerRoutes } from "./routes.js";
 import { registerWeb } from "./web.js";
 
+// Keep the password-equivalent API token out of the logs: it may arrive as a
+// ?token= query param, so scrub it from any logged URL.
+function redactUrl(url: string): string {
+  return url.replace(/([?&]token=)[^&]*/gi, "$1REDACTED");
+}
+
 // Larger body limit so prompts can carry base64-encoded images.
-const app = Fastify({ logger: true, bodyLimit: 25 * 1024 * 1024 });
+const app = Fastify({
+  logger: {
+    serializers: {
+      req(request) {
+        return {
+          method: request.method,
+          url: redactUrl(request.url),
+          hostname: request.hostname,
+          remoteAddress: request.ip
+        };
+      }
+    }
+  },
+  bodyLimit: 25 * 1024 * 1024
+});
 await app.register(cors, {
   origin: true,
   allowedHeaders: ["content-type", "authorization"]
